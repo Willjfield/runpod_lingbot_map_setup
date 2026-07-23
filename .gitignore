@@ -1,0 +1,10 @@
+.venv-mesh/
+__pycache__/
+*.pyc
+.DS_Store
+kitchen/
+kitchen.glb
+kitchen.mp4
+*_mesh.ply
+*_mesh.glb
+*_splat.ply

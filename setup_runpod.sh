@@ -244,7 +244,11 @@ RUN_EXAMPLE="$WORKSPACE/run_example.sh"
 OUTPUT_DIR="$WORKSPACE/outputs/courthouse"
 cat > "$RUN_EXAMPLE" <<EOF
 #!/usr/bin/env bash
-# Offline courthouse example → GLB (skips flythrough MP4 by default).
+# Offline courthouse example → NPZ predictions → GLB.
+#
+# Note: batch_demo's --save_glb uses predictions_to_glb, which expects
+# world_points / world_points_from_depth. Streaming outputs depth+poses only,
+# so that path KeyErrors. Convert via demo_render's npz_to_glb instead.
 set -euo pipefail
 WORKSPACE="${WORKSPACE}"
 REPO_DIR="${REPO_DIR}"
@@ -252,6 +256,8 @@ CONDA_ROOT="${CONDA_ROOT}"
 ENV_NAME="${ENV_NAME}"
 CKPT_PATH="${CKPT_PATH}"
 OUTPUT_DIR="${OUTPUT_DIR}"
+NPZ_DIR="\$OUTPUT_DIR/courthouse"
+GLB_PATH="\$OUTPUT_DIR/courthouse.glb"
 
 # shellcheck disable=SC1091
 source "\$CONDA_ROOT/etc/profile.d/conda.sh"
@@ -267,19 +273,35 @@ fi
 mkdir -p "\$OUTPUT_DIR"
 echo "Running offline batch_demo on example/courthouse"
 echo "  checkpoint: \$CKPT_PATH"
-echo "  output:     \$OUTPUT_DIR/courthouse.glb  (via --save_glb)"
-echo "  tip: drop --no_render from this script to also write an MP4 flythrough"
+echo "  npz dir:    \$NPZ_DIR"
+echo "  glb out:    \$GLB_PATH"
 echo
 
-exec python demo_render/batch_demo.py \\
-  --input_folder example \\
-  --scenes courthouse \\
-  --output_folder "\$OUTPUT_DIR" \\
-  --model_path "\$CKPT_PATH" \\
-  --mask_sky \\
-  --save_glb \\
-  --no_render \\
-  "\$@"
+# Skip inference if NPZs already exist (e.g. after a previous --save_glb failure)
+if [[ ! -d "\$NPZ_DIR" ]] || ! compgen -G "\$NPZ_DIR/frame_*.npz" >/dev/null; then
+  python demo_render/batch_demo.py \\
+    --input_folder example \\
+    --scenes courthouse \\
+    --output_folder "\$OUTPUT_DIR" \\
+    --model_path "\$CKPT_PATH" \\
+    --mask_sky \\
+    --save_predictions \\
+    --no_render \\
+    "\$@"
+else
+  echo "Found existing NPZs in \$NPZ_DIR — skipping inference"
+fi
+
+echo "Converting NPZ → GLB..."
+cd "\$REPO_DIR/demo_render"
+python -m interactive_viewer.npz_to_glb \\
+  --input_dir "\$NPZ_DIR" \\
+  --output "\$GLB_PATH" \\
+  --downsample 2 \\
+  --max_points 5000000
+
+echo "Done: \$GLB_PATH"
+ls -lh "\$GLB_PATH"
 EOF
 chmod +x "$RUN_EXAMPLE"
 
@@ -317,10 +339,15 @@ Your own data (GLB)
   python demo_render/batch_demo.py \\
     --input_folder /workspace/inputs --scenes myscene \\
     --output_folder /workspace/outputs/myscene \\
-    --model_path $CKPT_PATH --mask_sky --save_glb --no_render
+    --model_path $CKPT_PATH --mask_sky --save_predictions --no_render
+
+  cd $REPO_DIR/demo_render
+  python -m interactive_viewer.npz_to_glb \\
+    --input_dir /workspace/outputs/myscene/myscene \\
+    --output /workspace/outputs/myscene/myscene.glb
 
   # --model_path is always the .pt checkpoint, never a .glb path.
-  # --save_glb writes <scene>.glb into --output_folder.
+  # Avoid batch_demo --save_glb (broken for streaming depth outputs).
 
 Long sequences: add windowed flags, e.g.
   --mode windowed --window_size 128 --overlap_keyframes 8 --keyframe_interval 10
